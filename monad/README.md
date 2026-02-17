@@ -64,3 +64,22 @@ $ forge --help
 $ anvil --help
 $ cast --help
 ```
+
+## Frontend Prototype (WPlace-style)
+
+A local frontend scaffold now lives at `monad/frontend` with:
+
+- World map landing page
+- Zoom-based pixel-art overlays (visible at higher zoom)
+- "Start painting" flow that routes to a wallet login page
+- Wallet connect action for Monad testnet
+
+### Run locally
+
+```shell
+cd frontend
+npm install
+npm run dev
+```
+
+The app runs on Vite's local dev server (typically `http://localhost:5173`).
