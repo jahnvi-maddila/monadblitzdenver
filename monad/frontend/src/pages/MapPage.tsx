@@ -10,12 +10,8 @@ const PIXEL_REVEAL_ZOOM = 4
 function MapPage() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
   const [zoomLevel, setZoomLevel] = useState(2)
-  const [walletAddress, setWalletAddress] = useState<string | null>(null)
+  const [walletAddress] = useState<string | null>(() => getStoredWalletAddress())
   const navigate = useNavigate()
-
-  useEffect(() => {
-    setWalletAddress(getStoredWalletAddress())
-  }, [])
 
   useEffect(() => {
     if (!mapContainerRef.current) {
