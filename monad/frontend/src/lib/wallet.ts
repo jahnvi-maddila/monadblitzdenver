@@ -140,6 +140,23 @@ export async function payToSkipCooldown(): Promise<string> {
   return txResponse
 }
 
+export async function sendContractTransaction(to: string, data: string): Promise<string> {
+  const provider = getInjectedProvider()
+  await ensureMonadNetwork(provider)
+  const [account] = await requestWalletAccounts(provider)
+  localStorage.setItem(STORED_WALLET_KEY, account)
+
+  const txResponse = await provider.request({
+    method: 'eth_sendTransaction',
+    params: [{ from: account, to, data }],
+  })
+
+  if (typeof txResponse !== 'string') {
+    throw new Error('Transaction failed: invalid transaction hash.')
+  }
+  return txResponse
+}
+
 export function getStoredWalletAddress(): string | null {
   return localStorage.getItem(STORED_WALLET_KEY)
 }

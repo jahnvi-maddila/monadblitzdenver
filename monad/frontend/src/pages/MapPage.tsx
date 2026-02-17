@@ -2,9 +2,7 @@ import L from 'leaflet'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  COOLDOWN_SKIP_FEE_MON,
   getStoredWalletAddress,
-  payToSkipCooldown,
   shortenWalletAddress,
 } from '../lib/wallet'
 import {
@@ -15,12 +13,12 @@ import {
   type PaintedPixels,
 } from '../lib/worldPixelBoard'
 
-const PIXEL_REVEAL_ZOOM = 4
-const PAINTS_PER_SESSION = 64
-const SESSION_COOLDOWN_MS = 30_000
+const PIXEL_REVEAL_ZOOM = 4 // Show pixel canvas from zoom 4 so you can see what you draw
+const MAX_PIXEL_CHARGES = 30 // wplace.live gives 30 charges
+const CHARGE_REGENERATION_MS = 30_000 // One charge regenerates every 30 seconds
 const PAINTED_PIXELS_STORAGE_KEY = 'wplace.paintedPixels'
-const PAINT_CREDITS_STORAGE_KEY = 'wplace.paintCredits'
-const COOLDOWN_UNTIL_STORAGE_KEY = 'wplace.cooldownUntil'
+const PAINT_CREDITS_STORAGE_KEY = 'wplace.pixelCharges'
+const COOLDOWN_UNTIL_STORAGE_KEY = 'wplace.lastChargeRegenTime'
 const PALETTE_COLORS = [
   '#ffffff',
   '#0f172a',
@@ -83,9 +81,6 @@ function readStoredNullableNumber(key: string): number | null {
   return Number.isFinite(parsedNumber) ? parsedNumber : null
 }
 
-function shortenTransactionHash(txHash: string): string {
-  return `${txHash.slice(0, 8)}...${txHash.slice(-6)}`
-}
 
 function MapPage() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
@@ -97,17 +92,18 @@ function MapPage() {
     getStoredWalletAddress(),
   )
   const [selectedColor, setSelectedColor] = useState(PALETTE_COLORS[0]!)
+  const [isEraserMode, setIsEraserMode] = useState(false)
+  const [isSpaceHeld, setIsSpaceHeld] = useState(false)
   const [paintedPixels, setPaintedPixels] = useState<PaintedPixels>(() =>
     readStoredPaintedPixels(),
   )
-  const [paintCredits, setPaintCredits] = useState(() =>
-    readStoredNumber(PAINT_CREDITS_STORAGE_KEY, PAINTS_PER_SESSION),
+  const [pixelCharges, setPixelCharges] = useState(() =>
+    readStoredNumber(PAINT_CREDITS_STORAGE_KEY, MAX_PIXEL_CHARGES),
   )
-  const [cooldownUntil, setCooldownUntil] = useState<number | null>(() =>
-    readStoredNullableNumber(COOLDOWN_UNTIL_STORAGE_KEY),
+  const [lastChargeRegenTime, setLastChargeRegenTime] = useState(() =>
+    readStoredNullableNumber(COOLDOWN_UNTIL_STORAGE_KEY) ?? Date.now(),
   )
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
-  const [isPayingToSkip, setIsPayingToSkip] = useState(false)
   const [currentTimeMs, setCurrentTimeMs] = useState(() => Date.now())
   const initialOverlayDataUrlRef = useRef(
     buildWorldPixelBoardDataUrl(readStoredPaintedPixels()),
@@ -124,13 +120,22 @@ function MapPage() {
     }
   }, [])
 
-  const cooldownMsRemaining = cooldownUntil
-    ? Math.max(cooldownUntil - currentTimeMs, 0)
-    : 0
-  const cooldownSecondsRemaining = Math.ceil(cooldownMsRemaining / 1000)
-  const cooldownActive = cooldownMsRemaining > 0
-  const sessionResetReady = cooldownUntil !== null && !cooldownActive
-  const effectivePaintCredits = sessionResetReady ? PAINTS_PER_SESSION : paintCredits
+  // Regenerate charges every 30 seconds
+  useEffect(() => {
+    const timeSinceLastRegen = currentTimeMs - lastChargeRegenTime
+    const chargesToAdd = Math.floor(timeSinceLastRegen / CHARGE_REGENERATION_MS)
+    
+    if (chargesToAdd > 0 && pixelCharges < MAX_PIXEL_CHARGES) {
+      const newCharges = Math.min(MAX_PIXEL_CHARGES, pixelCharges + chargesToAdd)
+      setPixelCharges(newCharges)
+      setLastChargeRegenTime(
+        lastChargeRegenTime + chargesToAdd * CHARGE_REGENERATION_MS
+      )
+    }
+  }, [currentTimeMs, lastChargeRegenTime, pixelCharges])
+
+  const timeUntilNextCharge = CHARGE_REGENERATION_MS - ((currentTimeMs - lastChargeRegenTime) % CHARGE_REGENERATION_MS)
+  const secondsUntilNextCharge = Math.ceil(timeUntilNextCharge / 1000)
   const walletConnected = walletAddress !== null
 
   useEffect(() => {
@@ -141,17 +146,12 @@ function MapPage() {
   }, [paintedPixels])
 
   useEffect(() => {
-    localStorage.setItem(PAINT_CREDITS_STORAGE_KEY, String(paintCredits))
-  }, [paintCredits])
+    localStorage.setItem(PAINT_CREDITS_STORAGE_KEY, String(pixelCharges))
+  }, [pixelCharges])
 
   useEffect(() => {
-    if (cooldownUntil && cooldownUntil > currentTimeMs) {
-      localStorage.setItem(COOLDOWN_UNTIL_STORAGE_KEY, String(cooldownUntil))
-      return
-    }
-
-    localStorage.removeItem(COOLDOWN_UNTIL_STORAGE_KEY)
-  }, [cooldownUntil, currentTimeMs])
+    localStorage.setItem(COOLDOWN_UNTIL_STORAGE_KEY, String(lastChargeRegenTime))
+  }, [lastChargeRegenTime])
 
   const clearHoverCell = useCallback(() => {
     const map = mapRef.current
@@ -182,6 +182,7 @@ function MapPage() {
     if (currentZoom >= PIXEL_REVEAL_ZOOM) {
       if (!map.hasLayer(boardOverlay)) {
         boardOverlay.addTo(map)
+        boardOverlay.bringToFront()
       }
 
       return
@@ -195,74 +196,77 @@ function MapPage() {
   }, [clearHoverCell])
 
   const paintPixelAtLatLng = useCallback(
-    (latlng: L.LatLng) => {
+    (latlng: L.LatLng, forcePaint = false) => {
       if (!walletAddress) {
         setStatusMessage('Connect your wallet to start painting.')
         navigate('/login')
-        return
+        return false
       }
 
       if (zoomLevel < PIXEL_REVEAL_ZOOM) {
         setStatusMessage(
           `Zoom to at least level ${PIXEL_REVEAL_ZOOM} to place pixels.`,
         )
-        return
+        return false
       }
 
-      if (cooldownUntil && Date.now() < cooldownUntil) {
+      // Check if we have charges (eraser doesn't consume charges)
+      if (!isEraserMode && pixelCharges <= 0) {
         setStatusMessage(
-          `Cooldown active: wait ${cooldownSecondsRemaining}s or pay to skip.`,
+          `No charges available. Next charge in ${secondsUntilNextCharge}s.`,
         )
-        return
-      }
-
-      const refreshedCredits = cooldownUntil ? PAINTS_PER_SESSION : paintCredits
-
-      if (cooldownUntil) {
-        setCooldownUntil(null)
-        setPaintCredits(PAINTS_PER_SESSION)
-      }
-
-      if (refreshedCredits <= 0) {
-        const nextCooldownAt = Date.now() + SESSION_COOLDOWN_MS
-        setCooldownUntil(nextCooldownAt)
-        setStatusMessage(
-          `Session exhausted. Cooldown started (${SESSION_COOLDOWN_MS / 1000}s).`,
-        )
-        return
+        return false
       }
 
       const cell = latLngToWorldPixelCell(latlng)
+      const colorToUse = isEraserMode ? null : selectedColor
 
-      setPaintedPixels((currentPixels) => ({
-        ...currentPixels,
-        [cell.key]: selectedColor,
-      }))
+      setPaintedPixels((currentPixels) => {
+        if (colorToUse === null) {
+          // Eraser mode - remove pixel
+          const { [cell.key]: removed, ...rest } = currentPixels
+          return rest
+        } else {
+          // Paint mode - set pixel
+          return {
+            ...currentPixels,
+            [cell.key]: colorToUse,
+          }
+        }
+      })
 
-      const remainingCredits = refreshedCredits - 1
-      setPaintCredits(remainingCredits)
-
-      if (remainingCredits === 0) {
-        const nextCooldownAt = Date.now() + SESSION_COOLDOWN_MS
-        setCooldownUntil(nextCooldownAt)
+      // Consume charge for painting (not erasing)
+      if (!isEraserMode && pixelCharges > 0) {
+        const newCharges = pixelCharges - 1
+        setPixelCharges(newCharges)
+        setLastChargeRegenTime(Date.now())
+        
+        if (newCharges === 0) {
+          setStatusMessage(
+            `No charges left. Next charge regenerates in ${CHARGE_REGENERATION_MS / 1000}s.`,
+          )
+        } else if (!forcePaint) {
+          // Only show status message for manual clicks, not space+move
+          setStatusMessage(
+            `Pixel placed at (${cell.x}, ${cell.y}). ${newCharges}/${MAX_PIXEL_CHARGES} charges left.`,
+          )
+        }
+      } else if (isEraserMode && !forcePaint) {
         setStatusMessage(
-          '64 pixels placed in this session. Cooldown started for 30 seconds.',
+          `Pixel erased at (${cell.x}, ${cell.y}).`,
         )
-        return
       }
 
-      setStatusMessage(
-        `Pixel placed at (${cell.x}, ${cell.y}). ${remainingCredits} credits left.`,
-      )
+      return true
     },
     [
-      cooldownSecondsRemaining,
-      cooldownUntil,
       navigate,
-      paintCredits,
+      pixelCharges,
       selectedColor,
       walletAddress,
       zoomLevel,
+      isEraserMode,
+      secondsUntilNextCharge,
     ],
   )
 
@@ -293,39 +297,6 @@ function MapPage() {
     [clearHoverCell, zoomLevel],
   )
 
-  const handleSkipCooldown = useCallback(async () => {
-    if (!walletAddress) {
-      setStatusMessage('Connect your wallet first to purchase a cooldown skip.')
-      navigate('/login')
-      return
-    }
-
-    if (!cooldownActive) {
-      setStatusMessage('No cooldown is active right now.')
-      return
-    }
-
-    setIsPayingToSkip(true)
-    setStatusMessage(null)
-
-    try {
-      const transactionHash = await payToSkipCooldown()
-      setCooldownUntil(null)
-      setPaintCredits(PAINTS_PER_SESSION)
-      setWalletAddress(getStoredWalletAddress())
-      setStatusMessage(
-        `Cooldown skipped. Payment tx: ${shortenTransactionHash(transactionHash)}.`,
-      )
-    } catch (error) {
-      if (error instanceof Error) {
-        setStatusMessage(error.message)
-      } else {
-        setStatusMessage('Cooldown payment failed. Please try again.')
-      }
-    } finally {
-      setIsPayingToSkip(false)
-    }
-  }, [cooldownActive, navigate, walletAddress])
 
   useEffect(() => {
     if (!mapContainerRef.current) {
@@ -335,8 +306,8 @@ function MapPage() {
     const map = L.map(mapContainerRef.current, {
       center: [22, 8],
       zoom: 2,
-      minZoom: 2,
-      maxZoom: 8,
+      minZoom: 1, // wplace.live uses zoom 1-19
+      maxZoom: 19, // wplace.live uses zoom 1-19
       worldCopyJump: true,
       zoomControl: false,
       preferCanvas: true,
@@ -356,7 +327,7 @@ function MapPage() {
       initialOverlayDataUrlRef.current,
       WORLD_PIXEL_BOUNDS,
       {
-        opacity: 0.96,
+        opacity: 1,
         className: 'pixel-board-overlay',
         interactive: false,
       },
@@ -380,6 +351,35 @@ function MapPage() {
     }
   }, [clearHoverCell, syncPixelBoardVisibility])
 
+  // Handle SPACE key for continuous painting
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code === 'Space' && !event.repeat) {
+        event.preventDefault()
+        setIsSpaceHeld(true)
+      }
+    }
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.code === 'Space') {
+        event.preventDefault()
+        setIsSpaceHeld(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [])
+
+  // Track last painted cell to prevent rapid re-painting same cell during space+move
+  const lastPaintedCellRef = useRef<string | null>(null)
+  const lastPaintTimeRef = useRef<number>(0)
+
   useEffect(() => {
     const map = mapRef.current
     if (!map) {
@@ -392,6 +392,27 @@ function MapPage() {
 
     const handleMapMouseMove = (event: L.LeafletMouseEvent) => {
       handleHoverCell(event.latlng)
+
+      // If SPACE is held, paint continuously (wplace.live behavior)
+      if (isSpaceHeld && walletAddress && zoomLevel >= PIXEL_REVEAL_ZOOM) {
+        const cell = latLngToWorldPixelCell(event.latlng)
+        const now = Date.now()
+        
+        // Prevent painting same cell too rapidly (at least 100ms between paints)
+        if (
+          lastPaintedCellRef.current !== cell.key ||
+          now - lastPaintTimeRef.current >= 100
+        ) {
+          // Check if we have charges
+          if (pixelCharges > 0) {
+            const success = paintPixelAtLatLng(event.latlng, true)
+            if (success) {
+              lastPaintedCellRef.current = cell.key
+              lastPaintTimeRef.current = now
+            }
+          }
+        }
+      }
     }
 
     const clearHover = () => {
@@ -407,7 +428,7 @@ function MapPage() {
       map.off('mousemove', handleMapMouseMove)
       map.off('mouseout', clearHover)
     }
-  }, [clearHoverCell, handleHoverCell, paintPixelAtLatLng])
+  }, [clearHoverCell, handleHoverCell, paintPixelAtLatLng, isSpaceHeld, walletAddress, zoomLevel, pixelCharges])
 
   useEffect(() => {
     const boardOverlay = boardOverlayRef.current
@@ -420,7 +441,7 @@ function MapPage() {
 
   const zoomHint =
     zoomLevel >= PIXEL_REVEAL_ZOOM
-      ? 'Pixel board active. Click any cell to paint.'
+      ? 'Pixel board active. Click to paint. Hold SPACE and move to paint continuously.'
       : `Zoom to level ${PIXEL_REVEAL_ZOOM} or higher to reveal pixel art.`
 
   return (
@@ -446,12 +467,12 @@ function MapPage() {
 
         <div className="paint-stats">
           <span className="stat-chip">
-            Session credits: {effectivePaintCredits}/{PAINTS_PER_SESSION}
+            Charges: {pixelCharges}/{MAX_PIXEL_CHARGES}
           </span>
-          <span className={cooldownActive ? 'stat-chip alert' : 'stat-chip ready'}>
-            {cooldownActive
-              ? `Cooldown: ${cooldownSecondsRemaining}s`
-              : 'Painting ready'}
+          <span className={pixelCharges < MAX_PIXEL_CHARGES ? 'stat-chip alert' : 'stat-chip ready'}>
+            {pixelCharges < MAX_PIXEL_CHARGES
+              ? `Next charge: ${secondsUntilNextCharge}s`
+              : 'All charges ready'}
           </span>
         </div>
 
@@ -464,12 +485,24 @@ function MapPage() {
                 selectedColor === color ? 'selected' : ''
               }`}
               style={{ backgroundColor: color }}
-              onClick={() => setSelectedColor(color)}
+              onClick={() => {
+                setSelectedColor(color)
+                setIsEraserMode(false)
+              }}
               aria-label={`Select color ${color}`}
               title={color}
             />
           ))}
         </div>
+
+        <button
+          type="button"
+          className={`secondary-btn ${isEraserMode ? 'eraser-active' : ''}`}
+          onClick={() => setIsEraserMode(!isEraserMode)}
+          style={{ marginTop: '0.75rem' }}
+        >
+          {isEraserMode ? '✏️ Eraser Mode (Click to disable)' : '🗑️ Eraser'}
+        </button>
 
         {!walletConnected ? (
           <button
@@ -478,19 +511,6 @@ function MapPage() {
             onClick={() => navigate('/login')}
           >
             Connect wallet to paint
-          </button>
-        ) : null}
-
-        {walletConnected && cooldownActive ? (
-          <button
-            type="button"
-            className="primary-btn"
-            disabled={isPayingToSkip}
-            onClick={handleSkipCooldown}
-          >
-            {isPayingToSkip
-              ? 'Waiting for wallet confirmation...'
-              : `Pay ${COOLDOWN_SKIP_FEE_MON} MON to skip cooldown`}
           </button>
         ) : null}
 

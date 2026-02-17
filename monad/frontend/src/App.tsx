@@ -1,16 +1,8 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
 import './App.css'
-import LoginPage from './pages/LoginPage'
-import MapPage from './pages/MapPage'
+import CanvasPage from './pages/CanvasPage'
 
 function App() {
-  return (
-    <Routes>
-      <Route path="/" element={<MapPage />} />
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
-  )
+  return <CanvasPage />
 }
 
 export default App

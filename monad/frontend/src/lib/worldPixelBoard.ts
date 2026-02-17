@@ -1,7 +1,8 @@
 import L from 'leaflet'
 
-export const WORLD_PIXEL_WIDTH = 1024
-export const WORLD_PIXEL_HEIGHT = 512
+// Canvas size must stay within browser limits (~16k per side). Use 2048x1024 so drawing is visible.
+export const WORLD_PIXEL_WIDTH = 2048
+export const WORLD_PIXEL_HEIGHT = 1024
 export const WORLD_MIN_LATITUDE = -82
 export const WORLD_MAX_LATITUDE = 82
 export const WORLD_PIXEL_BOUNDS = L.latLngBounds(
@@ -275,7 +276,9 @@ export function buildWorldPixelBoardDataUrl(
     throw new Error('Unable to create world pixel board context.')
   }
 
-  context.clearRect(0, 0, WORLD_PIXEL_WIDTH, WORLD_PIXEL_HEIGHT)
+  // Fill with a visible background so the canvas and drawn pixels are always visible
+  context.fillStyle = '#1e293b'
+  context.fillRect(0, 0, WORLD_PIXEL_WIDTH, WORLD_PIXEL_HEIGHT)
   drawPixelsIntoContext(context, seededPixels)
   drawPixelsIntoContext(context, playerPaintedPixels)
 

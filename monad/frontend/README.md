@@ -1,37 +1,35 @@
-# WPlace Monad Frontend Prototype
+# 64×64 Canvas
 
-This app is the first frontend milestone for an onchain, WPlace-style world canvas.
+Shared 64×64 pixel canvas. Use the REST backend only, or mint pixels on **Monad Testnet** by deploying the contract and connecting your wallet.
 
-## Features
+## Run locally (REST only)
 
-- World map landing page with Leaflet + OpenStreetMap tiles
-- Pixelated world board overlay that appears only when zooming in
-- Wallet login flow (`/login`) for painting access
-- Pixel placement on zoomed board cells with hover targeting
-- Session mechanic:
-  - 64 paint credits per session
-  - 30-second cooldown when credits reach zero
-  - Optional wallet payment to skip cooldown instantly
+**Terminal 1 – backend:** `npm install` then `npm run server` (port 3001)  
+**Terminal 2 – frontend:** `npm run dev` → open `http://localhost:5173`
 
-## Local Development
+Click a pixel to draw. The app proxies `/api` to the backend and polls so everyone sees the same canvas.
 
-```bash
-npm install
-npm run dev
-```
+## Mint pixels on-chain (Monad Testnet)
 
-Default local URL: `http://localhost:5173`
+1. **Deploy the contract** (from repo root `monad/`):
+   ```bash
+   forge script script/PixelCanvas.s.sol:PixelCanvasScript --rpc-url https://testnet-rpc.monad.xyz --broadcast --private-key <YOUR_PRIVATE_KEY>
+   ```
+   Copy the deployed contract address from the output.
 
-## Production Build
+2. **Point the frontend at the contract:** create `monad/frontend/.env`:
+   ```
+   VITE_PIXEL_CANVAS_ADDRESS=0xYourDeployedAddress
+   ```
+   Restart `npm run dev`.
+
+3. **Connect wallet:** click “Connect wallet” and approve Monad Testnet. Get testnet MON from [faucet.monad.xyz](https://faucet.monad.xyz).
+
+4. **Draw:** each pixel click sends a transaction and mints that pixel on-chain. Everyone reads the same canvas from the contract; no REST server needed for the canvas when the contract is set.
+
+## Build
 
 ```bash
 npm run lint
 npm run build
 ```
-
-## Cooldown Payment Configuration (optional)
-
-You can customize payment routing via Vite env variables:
-
-- `VITE_COOLDOWN_COLLECTOR` - recipient address for cooldown skip payments
-- `VITE_COOLDOWN_SKIP_FEE_WEI` - fee amount in wei hex format (example: `0x38d7ea4c68000` for 0.001 MON)
