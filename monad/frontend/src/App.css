@@ -68,6 +68,37 @@
   color: #cbd5e1;
 }
 
+.paint-stats {
+  margin-top: 0.8rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.stat-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  color: #e2e8f0;
+  border: 1px solid rgb(148 163 184 / 28%);
+  background: rgb(30 41 59 / 72%);
+}
+
+.stat-chip.ready {
+  color: #86efac;
+  border-color: rgb(74 222 128 / 40%);
+  background: rgb(5 46 22 / 42%);
+}
+
+.stat-chip.alert {
+  color: #fdba74;
+  border-color: rgb(251 146 60 / 42%);
+  background: rgb(67 20 7 / 42%);
+}
+
 .zoom-hint {
   font-weight: 600;
   color: #93c5fd !important;
@@ -103,6 +134,32 @@
 .primary-btn:not(:disabled):hover,
 .secondary-btn:hover {
   transform: translateY(-1px);
+}
+
+.palette-grid {
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.palette-color {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 0.4rem;
+  border: 2px solid rgb(15 23 42 / 50%);
+  cursor: pointer;
+}
+
+.palette-color.selected {
+  outline: 2px solid #f8fafc;
+  outline-offset: 1px;
+}
+
+.status-line {
+  margin-top: 0.85rem !important;
+  font-size: 0.84rem;
+  color: #bae6fd !important;
 }
 
 .login-screen {
