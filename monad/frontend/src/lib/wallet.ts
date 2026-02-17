@@ -1,5 +1,9 @@
 const STORED_WALLET_KEY = 'wplace.connectedWallet'
 const MONAD_CHAIN_ID_HEX = '0x279f'
+const DEFAULT_COOLDOWN_COLLECTOR = '0x000000000000000000000000000000000000dEaD'
+const DEFAULT_COOLDOWN_SKIP_FEE_WEI = '0x38d7ea4c68000' // 0.001 MON
+
+export const COOLDOWN_SKIP_FEE_MON = '0.001'
 
 type RequestParameters = readonly unknown[] | Record<string, unknown>
 
@@ -61,10 +65,7 @@ async function ensureMonadNetwork(provider: EthereumProvider): Promise<void> {
   }
 }
 
-export async function connectWallet(): Promise<string> {
-  const provider = getInjectedProvider()
-  await ensureMonadNetwork(provider)
-
+async function requestWalletAccounts(provider: EthereumProvider): Promise<string[]> {
   const accountsResponse = await provider.request({
     method: 'eth_requestAccounts',
   })
@@ -73,13 +74,70 @@ export async function connectWallet(): Promise<string> {
     throw new Error('Wallet connection failed: no account returned.')
   }
 
-  const [firstAccount] = accountsResponse
-  if (typeof firstAccount !== 'string') {
+  const accounts = accountsResponse.filter(
+    (account): account is string => typeof account === 'string',
+  )
+
+  if (accounts.length === 0) {
     throw new Error('Wallet connection failed: invalid account response.')
   }
 
+  return accounts
+}
+
+export async function connectWallet(): Promise<string> {
+  const provider = getInjectedProvider()
+  await ensureMonadNetwork(provider)
+
+  const [firstAccount] = await requestWalletAccounts(provider)
+
   localStorage.setItem(STORED_WALLET_KEY, firstAccount)
   return firstAccount
+}
+
+function getCooldownCollectorAddress(): string {
+  const configuredAddress = import.meta.env.VITE_COOLDOWN_COLLECTOR as
+    | string
+    | undefined
+
+  return configuredAddress && configuredAddress.length > 0
+    ? configuredAddress
+    : DEFAULT_COOLDOWN_COLLECTOR
+}
+
+function getCooldownSkipFeeWeiHex(): string {
+  const configuredFee = import.meta.env.VITE_COOLDOWN_SKIP_FEE_WEI as
+    | string
+    | undefined
+
+  return configuredFee && configuredFee.length > 0
+    ? configuredFee
+    : DEFAULT_COOLDOWN_SKIP_FEE_WEI
+}
+
+export async function payToSkipCooldown(): Promise<string> {
+  const provider = getInjectedProvider()
+  await ensureMonadNetwork(provider)
+  const [account] = await requestWalletAccounts(provider)
+
+  localStorage.setItem(STORED_WALLET_KEY, account)
+
+  const txResponse = await provider.request({
+    method: 'eth_sendTransaction',
+    params: [
+      {
+        from: account,
+        to: getCooldownCollectorAddress(),
+        value: getCooldownSkipFeeWeiHex(),
+      },
+    ],
+  })
+
+  if (typeof txResponse !== 'string') {
+    throw new Error('Payment transaction failed: invalid transaction hash.')
+  }
+
+  return txResponse
 }
 
 export function getStoredWalletAddress(): string | null {
