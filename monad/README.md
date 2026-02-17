@@ -70,7 +70,7 @@ $ cast --help
 A local frontend scaffold now lives at `monad/frontend` with:
 
 - World map landing page
-- Zoom-based pixel-art overlays (visible at higher zoom)
+- Pixelated world-board overlay (visible at higher zoom)
 - Wallet login/connect flow for Monad testnet
 - Click-to-paint pixel interaction
 - 64 paints per session and 30-second cooldown
