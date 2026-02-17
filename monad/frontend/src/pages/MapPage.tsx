@@ -1,17 +1,19 @@
 import L from 'leaflet'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { pixelArtIslands } from '../data/pixelArtData'
-import {
-  createPixelArtLayer,
-  type PixelClickPosition,
-} from '../lib/pixelArtLayer'
 import {
   COOLDOWN_SKIP_FEE_MON,
   getStoredWalletAddress,
   payToSkipCooldown,
   shortenWalletAddress,
 } from '../lib/wallet'
+import {
+  buildWorldPixelBoardDataUrl,
+  latLngToWorldPixelCell,
+  worldPixelCellToBounds,
+  WORLD_PIXEL_BOUNDS,
+  type PaintedPixels,
+} from '../lib/worldPixelBoard'
 
 const PIXEL_REVEAL_ZOOM = 4
 const PAINTS_PER_SESSION = 64
@@ -33,8 +35,6 @@ const PALETTE_COLORS = [
   '#ec4899',
   '#a16207',
 ]
-
-type PaintedPixels = Record<string, string>
 
 function readStoredPaintedPixels(): PaintedPixels {
   const rawState = localStorage.getItem(PAINTED_PIXELS_STORAGE_KEY)
@@ -90,7 +90,8 @@ function shortenTransactionHash(txHash: string): string {
 function MapPage() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<L.Map | null>(null)
-  const pixelLayerRef = useRef<L.LayerGroup | null>(null)
+  const boardOverlayRef = useRef<L.ImageOverlay | null>(null)
+  const hoverCellRef = useRef<L.Rectangle | null>(null)
   const [zoomLevel, setZoomLevel] = useState(2)
   const [walletAddress, setWalletAddress] = useState<string | null>(() =>
     getStoredWalletAddress(),
@@ -108,6 +109,9 @@ function MapPage() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [isPayingToSkip, setIsPayingToSkip] = useState(false)
   const [currentTimeMs, setCurrentTimeMs] = useState(() => Date.now())
+  const initialOverlayDataUrlRef = useRef(
+    buildWorldPixelBoardDataUrl(readStoredPaintedPixels()),
+  )
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -149,11 +153,26 @@ function MapPage() {
     localStorage.removeItem(COOLDOWN_UNTIL_STORAGE_KEY)
   }, [cooldownUntil, currentTimeMs])
 
-  const syncPixelLayerVisibility = useCallback(() => {
+  const clearHoverCell = useCallback(() => {
     const map = mapRef.current
-    const pixelLayer = pixelLayerRef.current
+    const hoverCell = hoverCellRef.current
 
-    if (!map || !pixelLayer) {
+    if (!map || !hoverCell) {
+      return
+    }
+
+    if (map.hasLayer(hoverCell)) {
+      map.removeLayer(hoverCell)
+    }
+
+    hoverCellRef.current = null
+  }, [])
+
+  const syncPixelBoardVisibility = useCallback(() => {
+    const map = mapRef.current
+    const boardOverlay = boardOverlayRef.current
+
+    if (!map || !boardOverlay) {
       return
     }
 
@@ -161,20 +180,22 @@ function MapPage() {
     setZoomLevel(currentZoom)
 
     if (currentZoom >= PIXEL_REVEAL_ZOOM) {
-      if (!map.hasLayer(pixelLayer)) {
-        pixelLayer.addTo(map)
+      if (!map.hasLayer(boardOverlay)) {
+        boardOverlay.addTo(map)
       }
 
       return
     }
 
-    if (map.hasLayer(pixelLayer)) {
-      map.removeLayer(pixelLayer)
-    }
-  }, [])
+    clearHoverCell()
 
-  const handlePixelClick = useCallback(
-    (position: PixelClickPosition) => {
+    if (map.hasLayer(boardOverlay)) {
+      map.removeLayer(boardOverlay)
+    }
+  }, [clearHoverCell])
+
+  const paintPixelAtLatLng = useCallback(
+    (latlng: L.LatLng) => {
       if (!walletAddress) {
         setStatusMessage('Connect your wallet to start painting.')
         navigate('/login')
@@ -211,9 +232,11 @@ function MapPage() {
         return
       }
 
+      const cell = latLngToWorldPixelCell(latlng)
+
       setPaintedPixels((currentPixels) => ({
         ...currentPixels,
-        [position.key]: selectedColor,
+        [cell.key]: selectedColor,
       }))
 
       const remainingCredits = refreshedCredits - 1
@@ -229,7 +252,7 @@ function MapPage() {
       }
 
       setStatusMessage(
-        `Pixel placed at ${position.islandId} (${position.rowIndex}, ${position.columnIndex}). ${remainingCredits} credits left.`,
+        `Pixel placed at (${cell.x}, ${cell.y}). ${remainingCredits} credits left.`,
       )
     },
     [
@@ -241,6 +264,33 @@ function MapPage() {
       walletAddress,
       zoomLevel,
     ],
+  )
+
+  const handleHoverCell = useCallback(
+    (latlng: L.LatLng) => {
+      const map = mapRef.current
+      if (!map || zoomLevel < PIXEL_REVEAL_ZOOM) {
+        clearHoverCell()
+        return
+      }
+
+      const cell = latLngToWorldPixelCell(latlng)
+      const bounds = worldPixelCellToBounds(cell.x, cell.y)
+
+      if (!hoverCellRef.current) {
+        hoverCellRef.current = L.rectangle(bounds, {
+          color: '#e2e8f0',
+          weight: 0.8,
+          fillOpacity: 0,
+          interactive: false,
+          dashArray: '2 2',
+        }).addTo(map)
+        return
+      }
+
+      hoverCellRef.current.setBounds(bounds)
+    },
+    [clearHoverCell, zoomLevel],
   )
 
   const handleSkipCooldown = useCallback(async () => {
@@ -290,6 +340,7 @@ function MapPage() {
       worldCopyJump: true,
       zoomControl: false,
       preferCanvas: true,
+      maxBounds: WORLD_PIXEL_BOUNDS.pad(0.2),
     })
     mapRef.current = map
 
@@ -301,20 +352,33 @@ function MapPage() {
         '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     }).addTo(map)
 
-    map.on('zoomend', syncPixelLayerVisibility)
+    const boardOverlay = L.imageOverlay(
+      initialOverlayDataUrlRef.current,
+      WORLD_PIXEL_BOUNDS,
+      {
+        opacity: 0.96,
+        className: 'pixel-board-overlay',
+        interactive: false,
+      },
+    )
+    boardOverlayRef.current = boardOverlay
+
+    map.on('zoomend', syncPixelBoardVisibility)
+    syncPixelBoardVisibility()
 
     return () => {
-      const pixelLayer = pixelLayerRef.current
-      if (pixelLayer && map.hasLayer(pixelLayer)) {
-        map.removeLayer(pixelLayer)
+      const boardOverlayLayer = boardOverlayRef.current
+      if (boardOverlayLayer && map.hasLayer(boardOverlayLayer)) {
+        map.removeLayer(boardOverlayLayer)
       }
 
-      map.off('zoomend', syncPixelLayerVisibility)
+      clearHoverCell()
+      map.off('zoomend', syncPixelBoardVisibility)
       map.remove()
       mapRef.current = null
-      pixelLayerRef.current = null
+      boardOverlayRef.current = null
     }
-  }, [syncPixelLayerVisibility])
+  }, [clearHoverCell, syncPixelBoardVisibility])
 
   useEffect(() => {
     const map = mapRef.current
@@ -322,24 +386,41 @@ function MapPage() {
       return
     }
 
-    const pixelLayer = createPixelArtLayer({
-      artworks: pixelArtIslands,
-      paintedPixels,
-      onPixelClick: handlePixelClick,
-    })
-    const previousLayer = pixelLayerRef.current
-
-    if (previousLayer && map.hasLayer(previousLayer)) {
-      map.removeLayer(previousLayer)
+    const handleMapClick = (event: L.LeafletMouseEvent) => {
+      paintPixelAtLatLng(event.latlng)
     }
 
-    pixelLayerRef.current = pixelLayer
-    syncPixelLayerVisibility()
-  }, [handlePixelClick, paintedPixels, syncPixelLayerVisibility])
+    const handleMapMouseMove = (event: L.LeafletMouseEvent) => {
+      handleHoverCell(event.latlng)
+    }
+
+    const clearHover = () => {
+      clearHoverCell()
+    }
+
+    map.on('click', handleMapClick)
+    map.on('mousemove', handleMapMouseMove)
+    map.on('mouseout', clearHover)
+
+    return () => {
+      map.off('click', handleMapClick)
+      map.off('mousemove', handleMapMouseMove)
+      map.off('mouseout', clearHover)
+    }
+  }, [clearHoverCell, handleHoverCell, paintPixelAtLatLng])
+
+  useEffect(() => {
+    const boardOverlay = boardOverlayRef.current
+    if (!boardOverlay) {
+      return
+    }
+
+    boardOverlay.setUrl(buildWorldPixelBoardDataUrl(paintedPixels))
+  }, [paintedPixels])
 
   const zoomHint =
     zoomLevel >= PIXEL_REVEAL_ZOOM
-      ? 'Pixel canvases are active. Click any tile to paint.'
+      ? 'Pixel board active. Click any cell to paint.'
       : `Zoom to level ${PIXEL_REVEAL_ZOOM} or higher to reveal pixel art.`
 
   return (
@@ -359,7 +440,7 @@ function MapPage() {
         <h2>Global Canvas</h2>
         <p>
           Explore the world map, zoom into regions, and discover community
-          pixel-art zones.
+          pixel art painted directly onto the world board.
         </p>
         <p className="zoom-hint">{zoomHint}</p>
 

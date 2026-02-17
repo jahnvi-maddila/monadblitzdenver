@@ -5,9 +5,9 @@ This app is the first frontend milestone for an onchain, WPlace-style world canv
 ## Features
 
 - World map landing page with Leaflet + OpenStreetMap tiles
-- Pixel canvases that appear only when zooming in
+- Pixelated world board overlay that appears only when zooming in
 - Wallet login flow (`/login`) for painting access
-- Pixel placement on zoomed canvases
+- Pixel placement on zoomed board cells with hover targeting
 - Session mechanic:
   - 64 paint credits per session
   - 30-second cooldown when credits reach zero

@@ -9,6 +9,12 @@
   inset: 0;
 }
 
+.pixel-board-overlay {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  pointer-events: none;
+}
+
 .map-header {
   position: absolute;
   top: 1rem;
