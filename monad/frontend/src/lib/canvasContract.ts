@@ -8,6 +8,8 @@ const MONAD_TESTNET: Chain = {
   blockExplorers: { default: { name: 'Socialscan', url: 'https://monad-testnet.socialscan.io' } },
 }
 
+export const MAX_BATCH_PIXELS = 32
+
 const PIXEL_CANVAS_ABI = [
   {
     inputs: [
@@ -16,6 +18,17 @@ const PIXEL_CANVAS_ABI = [
       { name: 'color', type: 'bytes3' },
     ],
     name: 'setPixel',
+    outputs: [],
+    stateMutability: 'nonpayable',
+    type: 'function',
+  },
+  {
+    inputs: [
+      { name: 'xs', type: 'uint8[]', internalType: 'uint8[]' },
+      { name: 'ys', type: 'uint8[]', internalType: 'uint8[]' },
+      { name: 'colors', type: 'bytes3[]', internalType: 'bytes3[]' },
+    ],
+    name: 'setPixels',
     outputs: [],
     stateMutability: 'nonpayable',
     type: 'function',
@@ -83,6 +96,19 @@ export function encodeSetPixel(x: number, y: number, colorHex: string): `0x${str
     abi: PIXEL_CANVAS_ABI,
     functionName: 'setPixel',
     args: [x, y, hexToBytes3(colorHex)],
+  })
+}
+
+export function encodeSetPixels(
+  xs: number[],
+  ys: number[],
+  colorHexes: string[],
+): `0x${string}` {
+  const colors = colorHexes.map((h) => hexToBytes3(h))
+  return encodeFunctionData({
+    abi: PIXEL_CANVAS_ABI,
+    functionName: 'setPixels',
+    args: [xs, ys, colors],
   })
 }
 

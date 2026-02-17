@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   getContractAddress,
   getCanvasFromChain,
-  encodeSetPixel,
+  encodeSetPixels,
   key,
+  MAX_BATCH_PIXELS,
   type Pixels,
 } from '../lib/canvasContract'
 import {
@@ -33,6 +34,8 @@ const PALETTE = [
   '#78716c',
 ]
 
+type PendingPixel = { x: number; y: number; color: string }
+
 async function fetchCanvasApi(): Promise<Pixels> {
   const res = await fetch(`${API}/canvas`)
   if (!res.ok) throw new Error('Failed to load canvas')
@@ -55,6 +58,7 @@ async function setPixelApi(x: number, y: number, color: string): Promise<void> {
 export default function CanvasPage() {
   const contractAddress = getContractAddress()
   const [pixels, setPixels] = useState<Pixels>({})
+  const [pending, setPending] = useState<PendingPixel[]>([])
   const [selectedColor, setSelectedColor] = useState(PALETTE[0]!)
   const [status, setStatus] = useState<string>('Loading…')
   const [erasing, setErasing] = useState(false)
@@ -103,8 +107,22 @@ export default function CanvasPage() {
   }, [])
 
   const handleCellClick = useCallback(
-    async (x: number, y: number) => {
+    (x: number, y: number) => {
       const color = erasing ? '#000000' : selectedColor
+
+      if (contractAddress) {
+        setPending((prev) => {
+          const byKey = new Map(prev.map((p) => [key(p.x, p.y), p]))
+          if (color === '#000000') {
+            byKey.delete(key(x, y))
+          } else {
+            byKey.set(key(x, y), { x, y, color })
+          }
+          return Array.from(byKey.values())
+        })
+        return
+      }
+
       setPixels((prev) => {
         if (color === '#000000') {
           const next = { ...prev }
@@ -114,52 +132,65 @@ export default function CanvasPage() {
         return { ...prev, [key(x, y)]: color }
       })
       setStatus('')
-
-      if (contractAddress) {
-        if (!walletAddress) {
-          setStatus('Connect your wallet to mint pixels on-chain.')
-          load()
-          return
-        }
-        setTxPending(true)
-        try {
-          const data = encodeSetPixel(x, y, color)
-          await sendContractTransaction(contractAddress, data)
-          await load()
-        } catch (e) {
-          setStatus(e instanceof Error ? e.message : 'Transaction failed')
-          load()
-        } finally {
-          setTxPending(false)
-        }
-        return
-      }
-
-      try {
-        await setPixelApi(x, y, color)
-      } catch (e) {
+      setPixelApi(x, y, color).catch((e) => {
         setStatus(e instanceof Error ? e.message : 'Failed to save pixel')
         load()
-      }
+      })
     },
-    [selectedColor, erasing, load, contractAddress, walletAddress],
+    [selectedColor, erasing, contractAddress, pending.length, load],
   )
+
+  const handleSubmitBatch = useCallback(async () => {
+    if (!contractAddress || !walletAddress || pending.length === 0) {
+      if (contractAddress && pending.length === 0) setStatus('Stage some pixels first.')
+      return
+    }
+    const batch = pending.slice(0, MAX_BATCH_PIXELS)
+    setTxPending(true)
+    setStatus('Confirm transaction in your wallet…')
+    try {
+      const data = encodeSetPixels(
+        batch.map((p) => p.x),
+        batch.map((p) => p.y),
+        batch.map((p) => p.color),
+      )
+      await sendContractTransaction(contractAddress, data)
+      setPending((prev) => {
+        const batchSet = new Set(batch.map((p) => key(p.x, p.y)))
+        return prev.filter((p) => !batchSet.has(key(p.x, p.y)))
+      })
+      await load()
+      setStatus('')
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : 'Transaction failed')
+    } finally {
+      setTxPending(false)
+    }
+  }, [contractAddress, walletAddress, pending, load])
+
+  const displayPixels: Pixels = { ...pixels }
+  for (const p of pending) {
+    if (p.color === '#000000') delete displayPixels[key(p.x, p.y)]
+    else displayPixels[key(p.x, p.y)] = p.color
+  }
+  const pendingSet = new Set(pending.map((p) => key(p.x, p.y)))
 
   const grid = []
   for (let y = 0; y < SIZE; y++) {
     for (let x = 0; x < SIZE; x++) {
       const k = key(x, y)
+      const isStaged = pendingSet.has(k)
       grid.push(
         <button
           key={k}
           type="button"
-          className="pixel"
+          className={`pixel ${isStaged ? 'staged' : ''}`}
           style={{
             left: x * CELL_SIZE,
             top: y * CELL_SIZE,
             width: CELL_SIZE,
             height: CELL_SIZE,
-            backgroundColor: pixels[k] ?? '#1a1a1a',
+            backgroundColor: displayPixels[k] ?? '#1a1a1a',
           }}
           onClick={() => handleCellClick(x, y)}
           disabled={contractAddress ? txPending : false}
@@ -175,7 +206,14 @@ export default function CanvasPage() {
         <span className="title">64×64 Canvas</span>
         <div className="header-right">
           {contractAddress && (
-            <span className="chain-badge">On-chain (Monad Testnet)</span>
+            <>
+              {pending.length > 0 && (
+                <span className="pending-badge">
+                  {pending.length} staged (max {MAX_BATCH_PIXELS})
+                </span>
+              )}
+              <span className="chain-badge">On-chain (Monad Testnet)</span>
+            </>
           )}
           {walletAddress ? (
             <span className="wallet-chip">{shortenWalletAddress(walletAddress)}</span>
@@ -191,7 +229,12 @@ export default function CanvasPage() {
           )}
         </div>
       </header>
-      <p className="status-line">{status || (contractAddress ? 'Click a pixel to mint on-chain' : 'Click a pixel to draw')}</p>
+      <p className="status-line">
+        {status ||
+          (contractAddress
+            ? 'Click pixels to stage them, then click Submit to mint up to 32 at once.'
+            : 'Click a pixel to draw')}
+      </p>
 
       <div
         className="canvas-wrap"
@@ -204,6 +247,18 @@ export default function CanvasPage() {
       </div>
 
       <div className="tools">
+        {contractAddress && pending.length > 0 && (
+          <button
+            type="button"
+            className="submit-btn"
+            onClick={handleSubmitBatch}
+            disabled={!walletAddress || txPending}
+          >
+            {txPending
+              ? 'Submitting…'
+              : `Submit ${Math.min(pending.length, MAX_BATCH_PIXELS)} pixel${pending.length === 1 ? '' : 's'}`}
+          </button>
+        )}
         <div className="palette">
           {PALETTE.map((c) => (
             <button

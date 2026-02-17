@@ -38,6 +38,34 @@
   border-radius: 6px;
 }
 
+.pending-badge {
+  font-size: 0.75rem;
+  color: #facc15;
+  background: rgba(67, 20, 7, 0.5);
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+}
+
+.submit-btn {
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  border: 0;
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.submit-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.submit-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .wallet-chip {
   font-size: 0.875rem;
   color: #cbd5e1;
@@ -88,6 +116,12 @@
 .pixel:hover:not(:disabled) {
   filter: brightness(1.2);
   z-index: 1;
+}
+
+.pixel.staged {
+  outline: 2px solid #facc15;
+  outline-offset: -1px;
+  z-index: 2;
 }
 
 .pixel:disabled {
